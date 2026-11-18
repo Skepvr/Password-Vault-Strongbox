@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Strongbox</title>
+<style>
+:root{--bg:#e8ecef;--card:#fff;--ink:#1b2a33;--mute:#5b6b75;--line:#c9d3d9;--acc:#2a6b66;--accfg:#fff;--bad:#b3402e}
+@media(prefers-color-scheme:dark){:root{--bg:#12191e;--card:#1b252c;--ink:#e6edf1;--mute:#93a4ae;--line:#2d3b44;--acc:#5fb3aa;--accfg:#0d1a19;--bad:#ef8a76}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh}
+#app{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+h1{font:600 28px/1.2 Georgia,serif;margin:0}h3{margin:0 0 8px;font-family:Georgia,serif}
+.lock{max-width:380px;margin:12vh auto 0;display:flex;flex-direction:column;gap:10px}
+.lock p{color:var(--mute);margin:0 0 6px}
+input,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}
+input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--acc);background:var(--acc);color:var(--accfg);cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+button.bad{background:transparent;color:var(--bad);border-color:var(--bad)}
+button.sm{padding:5px 10px;font-size:14px}
+.err{color:var(--bad)!important;min-height:1.4em}
+.top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.top h1{flex:1}
+.entry{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.entry b{font-size:17px}.entry small{display:block;color:var(--mute);overflow-wrap:anywhere}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.pw{font-family:ui-monospace,Menlo,monospace;overflow-wrap:anywhere;margin-top:6px}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);width:min(420px,92vw);padding:18px}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+dialog label{display:block;margin:10px 0 3px;font-size:14px;color:var(--mute)}
+.row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.inl{display:flex;gap:6px}.inl button{white-space:nowrap}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
+.empty{text-align:center;color:var(--mute);padding:40px 0}
+</style></head><body><div id="app"></div><div id="toast"></div>
+<script>
+'use strict';
+const ITER=600000, IDLE=3*60*1000, CLIP=20000;
+const enc=new TextEncoder(),dec=new TextDecoder();
+const b64=b=>{b=new Uint8Array(b);let s='';for(let i=0;i<b.length;i+=8192)s+=String.fromCharCode(...b.subarray(i,i+8192));return btoa(s)};
+const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const h=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k.startsWith('on'))e.addEventListener(k.slice(2),a[k]);else if(k==='class')e.className=a[k];else e[k]=a[k]}e.append(...c);return e};
+let key=null,salt=null,iter=ITER,data=null,blob=null,idleT,clipT,query='';
+try{blob=JSON.parse(localStorage.getItem('strongbox')||'null')}catch{}
+
+async function derive(pw,s,it){const m=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt:s,iterations:it,hash:'SHA-256'},m,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])}
+async function seal(){const iv=crypto.getRandomValues(new Uint8Array(12));const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(JSON.stringify(data)));return{v:1,kdf:'PBKDF2-SHA256',iter,salt:b64(salt),iv:b64(iv),ct:b64(ct)}}
+async function openBlob(b,pw){const k=await derive(pw,unb64(b.salt),b.iter);const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(b.iv)},k,unb64(b.ct));return{k,d:JSON.parse(dec.decode(pt))}}
+async function save(){blob=await seal();try{localStorage.setItem('strongbox',JSON.stringify(blob))}catch{}}
+
+function gen(len=20){const set='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+?';const lim=Math.floor(2**32/set.length)*set.length;let o='';while(o.length<len){const r=crypto.getRandomValues(new Uint32Array(1))[0];if(r<lim)o+=set[r%set.length]}return o}
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2000)}
+const $=s=>document.querySelector(s);
+async function copy(txt,label){try{await navigator.clipboard.writeText(txt);toast(label+' copied'+(label==='Password'?' (clears in 20s)':''));clearTimeout(clipT);clipT=setTimeout(()=>navigator.clipboard.writeText('').catch(()=>{}),CLIP)}catch{toast('Copy blocked by browser')}}
+
+function ask(title,fields,ok='Save'){return new Promise(res=>{const d=h('dialog');const ins=fields.map(f=>f.type==='area'?h('textarea',{rows:3,value:f.value||''}):h('input',{type:f.type||'text',value:f.value||'',autocomplete:'off',spellcheck:false}));const done=v=>{d.close();d.remove();res(v)};
+d.append(h('h3',{},title));fields.forEach((f,i)=>{d.append(h('label',{},f.label));d.append(f.gen?h('div',{class:'inl'},ins[i],h('button',{class:'ghost',onclick:()=>{ins[i].value=gen(20)}},'Generate')):ins[i])});
+d.append(h('div',{class:'row'},h('button',{class:'ghost',onclick:()=>done(null)},'Cancel'),h('button',{onclick:()=>done(ins.map(i=>i.value))},ok)));
+d.addEventListener('cancel',e=>{e.preventDefault();done(null)});document.body.append(d);d.showModal();ins[0].focus()})}
+
+function lock(){key=null;data=null;clearTimeout(idleT);query='';render()}
+function bump(){if(!key)return;clearTimeout(idleT);idleT=setTimeout(lock,IDLE)}
+['click','keydown','pointermove','touchstart'].forEach(e=>addEventListener(e,bump,{passive:true}));
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&key){clearTimeout(idleT);idleT=setTimeout(lock,30000)}else bump()});
+
+function lockScreen(){
+ const exists=!!blob,pw=h('input',{type:'password',placeholder:'Master password',autocomplete:'off'}),pw2=h('input',{type:'password',placeholder:'Confirm master password',autocomplete:'off'}),msg=h('p',{class:'err'});
+ const go=async()=>{msg.textContent='';try{
+  if(exists){iter=blob.iter;const r=await openBlob(blob,pw.value);key=r.k;data=r.d;salt=unb64(blob.salt)}
+  else{if(pw.value.length<12){msg.textContent='Use at least 12 characters. A long passphrase works best.';return}
+   if(pw.value!==pw2.value){msg.textContent='Passwords do not match.';return}
+   iter=ITER;salt=crypto.getRandomValues(new Uint8Array(16));key=await derive(pw.value,salt,iter);data={entries:[]};await save()}
+  pw.value=pw2.value='';bump();render()}catch{msg.textContent='Wrong password, or the vault file is damaged.'}};
+ pw.addEventListener('keydown',e=>e.key==='Enter'&&go());pw2.addEventListener('keydown',e=>e.key==='Enter'&&go());
+ const f=h('input',{type:'file',accept:'.vault,application/json',hidden:true,onchange:async e=>{const x=e.target.files[0];if(!x)return;try{const b=JSON.parse(await x.text());if(!b.salt||!b.iv||!b.ct||!b.iter)throw 0;if(blob&&!confirm('Replace the vault stored in this browser with this file?'))return;blob=b;try{localStorage.setItem('strongbox',JSON.stringify(b))}catch{}render()}catch{toast('Not a valid vault file')}}});
+ return h('div',{class:'lock'},h('h1',{},'Strongbox'),h('p',{},exists?'Enter your master password to unlock.':'Create a vault. Your master password cannot be recovered, so choose one you will remember.'),pw,exists?'':pw2,msg,h('button',{onclick:go},exists?'Unlock':'Create vault'),h('button',{class:'ghost',onclick:()=>f.click()},'Open a vault file from another device'),f)}
+
+function entryCard(e){
+ const pwBox=h('div',{class:'pw'});let shown=false;
+ return h('div',{class:'entry'},h('b',{},e.name||'(untitled)'),h('small',{},[e.user,e.url].filter(Boolean).join('  |  ')),e.notes?h('small',{},e.notes):'',pwBox,
+ h('div',{class:'acts'},
+  h('button',{class:'sm',onclick:()=>copy(e.pw,'Password')},'Copy password'),
+  e.user?h('button',{class:'sm ghost',onclick:()=>copy(e.user,'Username')},'Copy username'):'',
+  h('button',{class:'sm ghost',onclick:ev=>{shown=!shown;pwBox.textContent=shown?e.pw:'';ev.target.textContent=shown?'Hide':'Show'}},'Show'),
+  h('button',{class:'sm ghost',onclick:()=>edit(e)},'Edit'),
+  h('button',{class:'sm bad',onclick:async()=>{if(confirm('Delete "'+e.name+'"?')){data.entries=data.entries.filter(x=>x!==e);await save();render()}}},'Delete')))}
+
+async function edit(e){
+ const isNew=!e;e=e||{id:crypto.randomUUID(),name:'',user:'',pw:gen(20),url:'',notes:''};
+ const r=await ask(isNew?'Add entry':'Edit entry',[{label:'Name',value:e.name},{label:'Username or email',value:e.user},{label:'Password',value:e.pw,gen:true},{label:'Website',value:e.url},{label:'Notes',value:e.notes,type:'area'}]);
+ if(!r)return;if(!r[0].trim()){toast('Name is required');return}
+ Object.assign(e,{name:r[0].trim(),user:r[1],pw:r[2],url:r[3],notes:r[4],updated:Date.now()});
+ if(isNew)data.entries.push(e);await save();render()}
+
+function exportFile(){const a=h('a',{href:URL.createObjectURL(new Blob([JSON.stringify(blob)],{type:'application/json'})),download:'strongbox-'+new Date().toISOString().slice(0,10)+'.vault'});document.body.append(a);a.click();a.remove();toast('Encrypted vault file saved')}
+async function merge(file){try{const b=JSON.parse(await file.text());const r=await ask('Merge vault file',[{label:'Master password of that file',type:'password'}],'Merge');if(!r)return;const o=await openBlob(b,r[0]);let n=0;for(const e of o.d.entries){const m=data.entries.find(x=>x.id===e.id);if(!m){data.entries.push(e);n++}else if((e.updated||0)>(m.updated||0)){Object.assign(m,e);n++}}await save();render();toast(n+' entries merged')}catch{toast('Could not open that file')}}
+async function changePw(){const r=await ask('Change master password',[{label:'New password (12+ characters)',type:'password'},{label:'Confirm new password',type:'password'}]);if(!r)return;if(r[0].length<12||r[0]!==r[1]){toast('Must match and be 12+ characters');return}salt=crypto.getRandomValues(new Uint8Array(16));iter=ITER;key=await derive(r[0],salt,iter);await save();toast('Master password changed. Re-export your vault file.')}
+
+function vaultScreen(){
+ const list=h('div'),mf=h('input',{type:'file',hidden:true,onchange:e=>{e.target.files[0]&&merge(e.target.files[0]);e.target.value=''}});
+ const fill=()=>{list.textContent='';const q=query.toLowerCase();const es=data.entries.filter(e=>[e.name,e.user,e.url].join(' ').toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
+  if(!es.length)list.append(h('div',{class:'empty'},data.entries.length?'No entries match your search.':'Your vault is empty. Add your first login.'));es.forEach(e=>list.append(entryCard(e)))};
+ const s=h('input',{type:'search',placeholder:'Search',value:query,oninput:e=>{query=e.target.value;fill()}});s.style.marginBottom='14px';
+ fill();
+ return h('div',{},h('div',{class:'top'},h('h1',{},'Strongbox'),h('button',{onclick:()=>edit()},'Add'),h('button',{class:'ghost',onclick:lock},'Lock')),s,list,
+  h('div',{class:'top',style:'margin-top:24px'},h('button',{class:'ghost sm',onclick:exportFile},'Export encrypted file'),h('button',{class:'ghost sm',onclick:()=>mf.click()},'Merge from file'),h('button',{class:'ghost sm',onclick:changePw},'Change master password'),mf))}
+
+function render(){const a=$('#app');a.textContent='';a.append(key?vaultScreen():lockScreen())}
+render();
+</script></body></html>
